@@ -58,6 +58,9 @@ OSDefineMetaClassAndStructors(MtkMwx, MtkHalService)
 #define PCI_PRODUCT_MEDIATEK_MT7922    0x7922
 
 #define MWX_LOG(x...) printf("SimpleMtkWlan-mwx: " x)
+
+/* entries into mwx_intr(), reported when an MCU command times out */
+static volatile uint32_t mwx_intr_calls;
 #define MWX_DEV_LOG(sc, fmt, args...) \
 	printf("SimpleMtkWlan-mwx: %s: " fmt, DEVNAME(sc), ##args)
 
@@ -1640,6 +1643,7 @@ mwx_intr(void *arg)
 	static uint32_t intr_log_count;
 	static uint32_t intr_unhandled_log_count;
 
+	mwx_intr_calls++;
 	mwx_write(sc, MT_WFDMA0_HOST_INT_ENA, 0);
 	intr = mwx_read(sc, MT_WFDMA0_HOST_INT_STA);
 	if (intr == 0) {
@@ -3248,6 +3252,32 @@ mwx_mcu_rx_event(struct mwx_softc *sc, struct mbuf *m)
 	m_freem(m);
 }
 
+/*
+ * Called when an MCU command times out: shows whether the device fetched
+ * the command (TX MCU ring DMA index), answered it (RX MCU ring DMA index)
+ * and raised an interrupt, so a dead interrupt path can be told apart from
+ * a firmware that does not answer.
+ */
+static void
+mwx_mcu_dump_state(struct mwx_softc *sc, uint32_t cmd)
+{
+	struct mwx_queue *tq = &sc->sc_txmcuq, *rq = &sc->sc_rxmcuq;
+
+	MWX_DEV_LOG(sc, "mcu timeout cmd=0x%x intr_calls=%u int_sta=0x%08x "
+	    "int_ena=0x%08x mask=0x%08x glo_cfg=0x%08x\n", cmd, mwx_intr_calls,
+	    mwx_read(sc, MT_WFDMA0_HOST_INT_STA),
+	    mwx_read(sc, MT_WFDMA0_HOST_INT_ENA), sc->sc_intr_mask,
+	    mwx_read(sc, MT_WFDMA0_GLO_CFG));
+	MWX_DEV_LOG(sc, "mcu timeout txmcu cpu=%u dma=%u prod=%u cons=%u "
+	    "rxmcu cpu=%u dma=%u prod=%u cons=%u\n",
+	    mwx_read(sc, tq->mq_regbase + MT_DMA_CPU_IDX),
+	    mwx_read(sc, tq->mq_regbase + MT_DMA_DMA_IDX), tq->mq_prod,
+	    tq->mq_cons,
+	    mwx_read(sc, rq->mq_regbase + MT_DMA_CPU_IDX),
+	    mwx_read(sc, rq->mq_regbase + MT_DMA_DMA_IDX), rq->mq_prod,
+	    rq->mq_cons);
+}
+
 int
 mwx_mcu_wait_resp_int(struct mwx_softc *sc, uint32_t cmd, int seq,
     uint32_t *val)
@@ -3259,6 +3289,7 @@ mwx_mcu_wait_resp_int(struct mwx_softc *sc, uint32_t cmd, int seq,
 	rv = tsleep_nsec(&sc->sc_mcu_wait[seq], 0, "mwxwait", SEC_TO_NSEC(3));
 	if (rv != 0) {
 		printf("%s: command %x timeout\n", DEVNAME(sc), cmd);
+		mwx_mcu_dump_state(sc, cmd);
 		mwx_reset(sc);
 		return rv;
 	}
@@ -3283,6 +3314,7 @@ mwx_mcu_wait_resp_msg(struct mwx_softc *sc, uint32_t cmd, int seq,
 	rv = tsleep_nsec(&sc->sc_mcu_wait[seq], 0, "mwxwait", SEC_TO_NSEC(3));
 	if (rv != 0) {
 		printf("%s: command %x timeout\n", DEVNAME(sc), cmd);
+		mwx_mcu_dump_state(sc, cmd);
 		mwx_reset(sc);
 		return rv;
 	}
