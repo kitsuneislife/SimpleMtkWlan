@@ -50,17 +50,6 @@ bool SimpleMtkWlan::init(OSDictionary *properties)
 #define  PCI_MSIX_FLAGS_ENABLE    0x8000    /* MSI-X enable */
 #define  PCI_MSI_FLAGS_ENABLE    0x0001    /* MSI feature enabled */
 
-static void pciMsiSetEnable(IOPCIDevice *device, UInt8 msiCap, int enable)
-{
-    u16 control;
-    
-    control = device->configRead16(msiCap + PCI_MSI_FLAGS);
-    control &= ~PCI_MSI_FLAGS_ENABLE;
-    if (enable)
-        control |= PCI_MSI_FLAGS_ENABLE;
-    device->configWrite16(msiCap + PCI_MSI_FLAGS, control);
-}
-
 static void pciMsiXClearAndSet(IOPCIDevice *device, UInt8 msixCap, UInt16 clear, UInt16 set)
 {
     u16 ctrl;
@@ -90,10 +79,8 @@ IOService* SimpleMtkWlan::probe(IOService *provider, SInt32 *score)
         if (msixCap) {
             pciMsiXClearAndSet(device, msixCap, PCI_MSIX_FLAGS_ENABLE, 0);
         }
+        /* MSI is enabled by IOPCIFamily when the MSI interrupt index is registered. */
         device->findPCICapability(PCI_CAP_ID_MSI, &msiCap);
-        if (msiCap) {
-            pciMsiSetEnable(device, msiCap, 1);
-        }
         if (!msiCap && !msixCap) {
             XYLog("%s No MSI cap\n", __FUNCTION__);
             fHalService->release();
