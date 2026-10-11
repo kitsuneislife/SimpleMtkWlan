@@ -5635,6 +5635,19 @@ mt7921_mac_fill_rx(struct mwx_softc *sc, struct mbuf *m,
 		v0 = le32toh(rxv[0]); /* XXX not implemented yet */ 
 		v1 = le32toh(rxv[1]);
 
+		{
+			/* debug: raw RX vectors of large frames */
+			static uint32_t rxv_log_count;
+			if (mbuf_pkthdr_len(m) > 1000 && rxv_log_count < 24) {
+				const uint32_t *g5 = rxd;
+				rxv_log_count++;
+				MWX_LOG("rxv len=%zu v0=0x%08x v1=0x%08x g5=%d "
+				    "c0=0x%08x c1=0x%08x c2=0x%08x\n",
+				    mbuf_pkthdr_len(m), v0, v1,
+				    (rxd1 & MT_RXD1_NORMAL_GROUP_5) != 0,
+				    le32toh(g5[0]), le32toh(g5[1]), le32toh(g5[2]));
+			}
+		}
 		if (rxd1 & MT_RXD1_NORMAL_GROUP_5) {
 			num_rxd += 18;
 			rxd += 6;
