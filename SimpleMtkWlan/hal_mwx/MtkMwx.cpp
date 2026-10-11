@@ -1021,7 +1021,7 @@ mwx_watchdog(struct ifnet *ifp)
 	}
 	last_intr_calls = mwx_intr_calls;
 
-	static uint32_t last_tx_ok, last_drop;
+	static uint32_t last_tx_ok, last_drop, last_freed;
 	uint32_t drop = mwx_tx_ebusy + mwx_tx_enobufs + mwx_tx_err;
 	if (mwx_tx_ok != last_tx_ok || drop != last_drop) {
 		MWX_DEV_LOG(sc, "txstat ok=%u ebusy=%u enobufs=%u err=%u "
@@ -1032,7 +1032,10 @@ mwx_watchdog(struct ifnet *ifp)
 		    mwx_txfree_tries, mwx_txfree_maxtries,
 		    mwx_tx_ok - mwx_txfree_msdus,
 		    mwx_dma_available_slots(&sc->sc_txq));
+		MWX_DEV_LOG(sc, "txrate %u ok/s %u freed/s\n",
+		    mwx_tx_ok - last_tx_ok, mwx_txfree_msdus - last_freed);
 		last_tx_ok = mwx_tx_ok;
+		last_freed = mwx_txfree_msdus;
 		last_drop = drop;
 	}
 
@@ -2920,6 +2923,20 @@ mwx_dma_rx_process(struct mwx_softc *sc, struct mbuf_list *ml)
 			mwx_mac_tx_free(sc, m);
 			break;
 		case PKT_TYPE_TXS:
+			{
+				/* debug: raw TX status words */
+				static uint32_t txs_log_count;
+				if (mwx_tx_ok > 300 && txs_log_count < 24 &&
+				    mbuf_len(m) >= 8 * sizeof(uint32_t)) {
+					txs_log_count++;
+					MWX_DEV_LOG(sc, "txs len=%zu %08x %08x %08x "
+					    "%08x %08x %08x %08x %08x\n", mbuf_len(m),
+					    le32toh(data[0]), le32toh(data[1]),
+					    le32toh(data[2]), le32toh(data[3]),
+					    le32toh(data[4]), le32toh(data[5]),
+					    le32toh(data[6]), le32toh(data[7]));
+				}
+			}
 #if TODO
 			for (rxd += 2; rxd + 8 <= end; rxd += 8)
 				mt7921_mac_add_txs(dev, rxd);
