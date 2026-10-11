@@ -1286,7 +1286,7 @@ mwx_newstate_task(void *ptr)
 		mt7921_mac_sta_update(sc, sc->sc_ic.ic_bss, 1, 1);
 		break;
 	case IEEE80211_S_ASSOC:
-		mwx_mcu_set_deep_sleep(sc, 1);
+		/* no deep sleep while associating (OpenBSD if_mwx.c 1.43) */
 		break;
 	case IEEE80211_S_RUN:
 		if (ic->ic_opmode == IEEE80211_M_MONITOR)
