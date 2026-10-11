@@ -49,6 +49,9 @@ public:
     virtual IOReturn enable(IONetworkInterface *interface) = 0;
     
     virtual IOReturn disable(IONetworkInterface *interface) = 0;
+
+    /* Leave the hardware idle and reset before power is removed. */
+    virtual void powerOff() {}
     
     virtual struct ieee80211com *get80211Controller() = 0;
     

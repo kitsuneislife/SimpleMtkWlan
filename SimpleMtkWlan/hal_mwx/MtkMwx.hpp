@@ -32,6 +32,7 @@ public:
     void detach(IOPCIDevice *device) override;
     IOReturn enable(IONetworkInterface *interface) override;
     IOReturn disable(IONetworkInterface *interface) override;
+    void powerOff() override;
     struct ieee80211com *get80211Controller() override;
     MtkDriverInfo *getDriverInfo() override;
     MtkDriverController *getDriverController() override;

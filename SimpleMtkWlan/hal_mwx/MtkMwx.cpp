@@ -6761,6 +6761,31 @@ MtkMwx::disable(IONetworkInterface *interface)
 	return kIOReturnSuccess;
 }
 
+/*
+ * Called before shutdown or restart.  The chip keeps its firmware running
+ * across a warm reset, and a later probe can then fail with "driver own
+ * failed" in any OS until power is cut.  Quiesce it the way Linux does in
+ * mt7921e_unregister_device(): take driver ownership, stop the DMA engine and
+ * reset WFSYS, so the next driver starts from a clean chip.
+ */
+void
+MtkMwx::powerOff()
+{
+	if (com == NULL)
+		return;
+
+	struct ifnet *ifp = &com->sc_ic.ic_if;
+	if (ifp->if_flags & IFF_RUNNING)
+		mwx_stop(ifp);
+
+	if (mwx_mcu_drv_pmctrl(com) != 0)
+		return;
+	mwx_write(com, MT_WFDMA0_HOST_INT_ENA, 0);
+	mwx_dma_disable(com, 1);
+	if (mwx_wfsys_reset(com) != 0)
+		printf("%s: WFSYS reset at power off failed\n", DEVNAME(com));
+}
+
 struct ieee80211com *
 MtkMwx::get80211Controller()
 {

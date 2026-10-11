@@ -73,6 +73,27 @@ IOReturn SimpleMtkWlan::setPowerState(unsigned long powerStateOrdinal, IOService
     return result;
 }
 
+static IOReturn powerOffHardware(OSObject *target, void *, void *, void *, void *)
+{
+    SimpleMtkWlan *self = (SimpleMtkWlan *)target;
+
+    if (self->fHalService)
+        self->fHalService->powerOff();
+    return kIOReturnSuccess;
+}
+
+void SimpleMtkWlan::systemWillShutdown(IOOptionBits specifier)
+{
+    XYLog("%s specifier=0x%x\n", __FUNCTION__, specifier);
+    if (specifier == kIOMessageSystemWillPowerOff ||
+        specifier == kIOMessageSystemWillRestart) {
+        if (watchdogTimer)
+            watchdogTimer->cancelTimeout();
+        getCommandGate()->runAction(powerOffHardware);
+    }
+    IOEthernetController::systemWillShutdown(specifier);
+}
+
 IOReturn SimpleMtkWlan::setWakeOnMagicPacket(bool active)
 {
     magicPacketEnabled = active;

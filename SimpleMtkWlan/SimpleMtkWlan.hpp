@@ -83,6 +83,7 @@ public:
     virtual IOReturn setPowerState( unsigned long powerStateOrdinal,
                                     IOService *   policyMaker) override;
     virtual IOReturn setWakeOnMagicPacket( bool active ) override;
+    virtual void systemWillShutdown(IOOptionBits specifier) override;
     
     void releaseAll();
     void joinSSID(const char *ssid, const char *pwd);
