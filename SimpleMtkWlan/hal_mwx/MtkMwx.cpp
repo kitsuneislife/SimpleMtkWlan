@@ -3298,6 +3298,17 @@ mwx_dma_dump_state(struct mwx_softc *sc, const char *why)
 		    name[i], mwx_read(sc, q[i]->mq_regbase + MT_DMA_CPU_IDX),
 		    mwx_read(sc, q[i]->mq_regbase + MT_DMA_DMA_IDX),
 		    q[i]->mq_prod, q[i]->mq_cons);
+	for (i = 0; i < nitems(q); i++) {
+		u_int d = mwx_read(sc, q[i]->mq_regbase + MT_DMA_DMA_IDX) %
+		    q[i]->mq_count;
+		u_int p = (d + q[i]->mq_count - 1) % q[i]->mq_count;
+		struct mwx_desc *a = &q[i]->mq_desc[p], *b = &q[i]->mq_desc[d];
+
+		MWX_DEV_LOG(sc, "%s: %s desc[%u] %08x %08x %08x %08x "
+		    "desc[%u] %08x %08x %08x %08x\n", why, name[i],
+		    p, a->buf0, a->ctrl, a->buf1, a->info,
+		    d, b->buf0, b->ctrl, b->buf1, b->info);
+	}
 }
 
 int
