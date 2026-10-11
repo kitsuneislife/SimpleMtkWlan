@@ -1655,6 +1655,20 @@ mwx_rx(struct mwx_softc *sc, struct mbuf *m, struct mbuf_list *ml)
 		}
 	}
 	sc->sc_rx_delivered++;
+	{
+		/* debug: data frames once the port is open */
+		static uint32_t rx_port_log_count;
+		uint8_t type = wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
+
+		if (ic->ic_bss != NULL && ic->ic_bss->ni_port_valid &&
+		    type == IEEE80211_FC0_TYPE_DATA && rx_port_log_count < 24) {
+			MWX_DEV_LOG(sc, "rx port data fc=%02x/%02x rxi_flags=0x%x "
+			    "len=%zu a1=%02x a3=%02x\n", wh->i_fc[0], wh->i_fc[1],
+			    rxi.rxi_flags, mbuf_len(m), wh->i_addr1[0],
+			    wh->i_addr3[0]);
+			rx_port_log_count++;
+		}
+	}
 
 #if NBPFILTER > 0
 	if (__predict_false(sc->sc_drvbpf != NULL)) {
