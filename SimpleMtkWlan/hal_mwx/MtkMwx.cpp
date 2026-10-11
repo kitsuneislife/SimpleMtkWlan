@@ -1410,6 +1410,30 @@ mwx_bgscan_done_task(void *arg)
 	splx(s);
 }
 
+static int
+mwx_set_group_key_sw(struct mwx_softc *sc, struct ieee80211_key *k)
+{
+	struct ieee80211com *ic = &sc->sc_ic;
+	struct ieee80211_node *ni = ic->ic_bss;
+	struct mwx_node *mn = (struct mwx_node *)ni;
+	int rv;
+
+	rv = ieee80211_set_key(ic, ni, k);
+	if (rv != 0)
+		return rv;
+
+	/* the pairwise key may already be in hardware: open the port then */
+	mn->flags |= MWX_NODE_FLAG_HAVE_GROUP_KEY;
+	if ((mn->flags & MWX_NODE_FLAG_HAVE_PAIRWISE_KEY) != 0 &&
+	    !ni->ni_port_valid) {
+		if (ni->ni_flags & IEEE80211_NODE_MFP)
+			ni->ni_flags |= IEEE80211_NODE_TXMGMTPROT;
+		ni->ni_port_valid = 1;
+		ieee80211_set_link_state(ic, LINK_STATE_UP);
+	}
+	return 0;
+}
+
 int
 mwx_set_key(struct ieee80211com *ic, struct ieee80211_node *ni,
     struct ieee80211_key *k)
@@ -1419,6 +1443,16 @@ mwx_set_key(struct ieee80211com *ic, struct ieee80211_node *ni,
 
 	DPRINTF("%s: set_key: ni %p, k_id %d, k_flags %x k_cipher %d\n",
 	    DEVNAME(sc), ni, k->k_id, k->k_flags, k->k_cipher);
+
+	/*
+	 * The hardware does not decrypt group-addressed frames with the GTK
+	 * installed on the BSS entry (they arrive with no WTBL match and
+	 * SEC_MODE 0), so keep group keys in software. A station never
+	 * transmits with the GTK, only the pairwise key goes to hardware.
+	 */
+	if (ic->ic_opmode == IEEE80211_M_STA &&
+	    (k->k_flags & IEEE80211_KEY_GROUP) != 0)
+		return mwx_set_group_key_sw(sc, k);
 
 	if ((sc->sc_setkey_cur + 1) % nitems(sc->sc_setkey_arg) ==
 	    sc->sc_setkey_tail)
@@ -1440,6 +1474,12 @@ mwx_delete_key(struct ieee80211com *ic, struct ieee80211_node *ni,
 
 	DPRINTF("%s: delete_key: ni %p, k_id %d, k_flags %x k_cipher %d\n",
 	    DEVNAME(sc), ni, k->k_id, k->k_flags, k->k_cipher);
+
+	if (ic->ic_opmode == IEEE80211_M_STA &&
+	    (k->k_flags & IEEE80211_KEY_GROUP) != 0) {
+		ieee80211_delete_key(ic, ni, k);
+		return;
+	}
 
 	mt7921_mcu_sta_key_delete(sc, ni, k);
 }
