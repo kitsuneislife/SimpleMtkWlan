@@ -65,6 +65,7 @@ static volatile uint32_t mwx_last_mcu_cmd;
 /* debug: TX path counters, reported by mwx_watchdog() */
 static uint32_t mwx_tx_ok, mwx_tx_ebusy, mwx_tx_enobufs, mwx_tx_err;
 static uint32_t mwx_txfree_events, mwx_txfree_msdus;
+static uint32_t mwx_txfree_failed, mwx_txfree_tries, mwx_txfree_maxtries;
 struct mwx_queue;
 static inline int mwx_dma_available_slots(struct mwx_queue *);
 static inline uint32_t
@@ -1025,9 +1026,11 @@ mwx_watchdog(struct ifnet *ifp)
 	uint32_t drop = mwx_tx_ebusy + mwx_tx_enobufs + mwx_tx_err;
 	if (mwx_tx_ok != last_tx_ok || drop != last_drop) {
 		MWX_DEV_LOG(sc, "txstat ok=%u ebusy=%u enobufs=%u err=%u "
-		    "txfree ev=%u msdu=%u inflight=%u ring_free=%d\n",
+		    "txfree ev=%u msdu=%u failed=%u tries=%u maxtries=%u "
+		    "inflight=%u ring_free=%d\n",
 		    mwx_tx_ok, mwx_tx_ebusy, mwx_tx_enobufs, mwx_tx_err,
-		    mwx_txfree_events, mwx_txfree_msdus,
+		    mwx_txfree_events, mwx_txfree_msdus, mwx_txfree_failed,
+		    mwx_txfree_tries, mwx_txfree_maxtries,
 		    mwx_tx_ok - mwx_txfree_msdus,
 		    mwx_dma_available_slots(&sc->sc_txq));
 		last_tx_ok = mwx_tx_ok;
@@ -6207,6 +6210,11 @@ mwx_mac_tx_free(struct mwx_softc *sc, struct mbuf *m)
 		if (mt->mt_busy == 0)
 			continue;
 		mwx_txfree_msdus++;
+		if (txval & MT_TX_FREE_STATUS_MASK)
+			mwx_txfree_failed++;
+		mwx_txfree_tries += txval & MT_TX_FREE_COUNT_MASK;
+		if ((txval & MT_TX_FREE_COUNT_MASK) > mwx_txfree_maxtries)
+			mwx_txfree_maxtries = txval & MT_TX_FREE_COUNT_MASK;
 		mwx_txwi_put(sc, mt);
 	}
 
