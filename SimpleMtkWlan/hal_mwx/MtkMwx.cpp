@@ -62,6 +62,11 @@ OSDefineMetaClassAndStructors(MtkMwx, MtkHalService)
 /* entries into mwx_intr(), reported when an MCU command times out */
 static volatile uint32_t mwx_intr_calls;
 static volatile uint32_t mwx_last_mcu_cmd;
+/* debug: TX path counters, reported by mwx_watchdog() */
+static uint32_t mwx_tx_ok, mwx_tx_ebusy, mwx_tx_enobufs, mwx_tx_err;
+static uint32_t mwx_txfree_events, mwx_txfree_msdus;
+struct mwx_queue;
+static inline int mwx_dma_available_slots(struct mwx_queue *);
 static inline uint32_t
 mwx_log_ms(void)
 {
@@ -1016,6 +1021,19 @@ mwx_watchdog(struct ifnet *ifp)
 	}
 	last_intr_calls = mwx_intr_calls;
 
+	static uint32_t last_tx_ok, last_drop;
+	uint32_t drop = mwx_tx_ebusy + mwx_tx_enobufs + mwx_tx_err;
+	if (mwx_tx_ok != last_tx_ok || drop != last_drop) {
+		MWX_DEV_LOG(sc, "txstat ok=%u ebusy=%u enobufs=%u err=%u "
+		    "txfree ev=%u msdu=%u inflight=%u ring_free=%d\n",
+		    mwx_tx_ok, mwx_tx_ebusy, mwx_tx_enobufs, mwx_tx_err,
+		    mwx_txfree_events, mwx_txfree_msdus,
+		    mwx_tx_ok - mwx_txfree_msdus,
+		    mwx_dma_available_slots(&sc->sc_txq));
+		last_tx_ok = mwx_tx_ok;
+		last_drop = drop;
+	}
+
 	ifp->if_timer = 0;
 	ieee80211_watchdog(ifp);
 }
@@ -1566,10 +1584,14 @@ mwx_tx(struct mwx_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 	int rv;
 
 	/* check if there is enough space before taking a txwi */
-	if (mwx_dma_available_slots(&sc->sc_txq) < 1)
+	if (mwx_dma_available_slots(&sc->sc_txq) < 1) {
+		mwx_tx_ebusy++;
 		return EBUSY;
-	if ((mt = mwx_txwi_get(sc)) == NULL)
+	}
+	if ((mt = mwx_txwi_get(sc)) == NULL) {
+		mwx_tx_enobufs++;
 		return ENOBUFS;
+	}
 	/* XXX DMA memory access without BUS_DMASYNC_PREWRITE */
 	txp = mt->mt_desc;
 	memset(txp, 0, sizeof(*txp));
@@ -1582,9 +1604,11 @@ mwx_tx(struct mwx_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 	 */
 	rv = mwx_txwi_enqueue(sc, mt, m, ni);
 	if (rv != 0) {
+		mwx_tx_err++;
 		mwx_txwi_put(sc, mt);
 		return rv;
 	}
+	mwx_tx_ok++;
 
 	static uint32_t tx_log_count;
 	if (tx_log_count < 32) {
@@ -6161,6 +6185,7 @@ mwx_mac_tx_free(struct mwx_softc *sc, struct mbuf *m)
 	m_adj(m, 2 * sizeof(txval));
 
 	count = MT_TX_FREE0_MSDU_CNT_GET(txval);
+	mwx_txfree_events++;
 
 	if (count * sizeof(txval) > mbuf_len(m))
 		goto out;
@@ -6181,6 +6206,7 @@ mwx_mac_tx_free(struct mwx_softc *sc, struct mbuf *m)
 		mt = &sc->sc_txwi.mt_data[msdu];
 		if (mt->mt_busy == 0)
 			continue;
+		mwx_txfree_msdus++;
 		mwx_txwi_put(sc, mt);
 	}
 
