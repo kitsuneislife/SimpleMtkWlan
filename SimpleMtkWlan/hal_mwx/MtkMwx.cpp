@@ -2948,6 +2948,8 @@ mwx_mcu_alloc_msg(size_t len)
 		return NULL;
 	mbuf_setlen(m, len + headspace);
 	mbuf_pkthdr_setlen(m, len + headspace);
+	/* callers fill only some fields; the rest must reach the MCU as 0 */
+	memset(mtod(m, caddr_t), 0, len + headspace);
 	m_adj(m, headspace);
 
 	return m;
