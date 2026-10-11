@@ -679,6 +679,8 @@ int		mt7921_mcu_rate_txpower_band(struct mwx_softc *, int,
 int		mt7921_mcu_set_rate_txpower(struct mwx_softc *);
 void		mt7921_mac_reset_counters(struct mwx_softc *);
 void		mt7921_mac_set_timing(struct mwx_softc *);
+int		mt7921_mcu_add_bss_info(struct mwx_softc *,
+		    struct ieee80211_node *, int);
 int		mt7921_mcu_uni_add_dev(struct mwx_softc *, struct mwx_vif *,
 		    struct mwx_node *, int);
 int		mt7921_mcu_set_sniffer(struct mwx_softc *, int);
@@ -1286,6 +1288,7 @@ mwx_newstate_task(void *ptr)
 		if (rv)
 			break;
 		mwx_mcu_set_deep_sleep(sc, 0);
+		mt7921_mcu_add_bss_info(sc, sc->sc_ic.ic_bss, 1);
 		mt7921_mac_sta_update(sc, sc->sc_ic.ic_bss, 1, 1);
 		break;
 	case IEEE80211_S_ASSOC:
@@ -5026,6 +5029,116 @@ printf("%s: %s cmd %x mvif idx %d omac %d band %d wmm %d\n", DEVNAME(sc), __func
 
 printf("%s: %s cmd %x wcid %d\n", DEVNAME(sc), __func__, cmd, mn->wcid);
 	return mwx_mcu_send_wait(sc, cmd, data, len);
+}
+
+/*
+ * Tell the firmware about the BSS we join: BSSID, beacon timing, PHY modes
+ * and the channel (BSS_INFO_UPDATE with BASIC/QBSS and RLM tags), like
+ * mt76_connac_mcu_uni_add_bss() does when Linux adds the AP station.
+ */
+int
+mt7921_mcu_add_bss_info(struct mwx_softc *sc, struct ieee80211_node *ni,
+    int enable)
+{
+	struct mwx_vif *mvif = &sc->sc_vif;
+	struct ieee80211_channel *c = ni->ni_chan;
+	struct {
+		struct {
+			uint8_t		bss_idx;
+			uint8_t		pad[3];
+		} __packed hdr;
+		struct mt76_connac_bss_basic_tlv basic;
+		struct {
+			uint16_t	tag;
+			uint16_t	len;
+			uint8_t		qos;
+			uint8_t		pad[3];
+		} __packed qos;
+	} __packed basic_req;
+	struct {
+		struct {
+			uint8_t		bss_idx;
+			uint8_t		pad[3];
+		} __packed hdr;
+		struct {
+			uint16_t	tag;
+			uint16_t	len;
+			uint8_t		control_channel;
+			uint8_t		center_chan;
+			uint8_t		center_chan2;
+			uint8_t		bw;
+			uint8_t		tx_streams;
+			uint8_t		rx_streams;
+			uint8_t		short_st;
+			uint8_t		ht_op_info;
+			uint8_t		sco;
+			uint8_t		band;
+			uint8_t		pad[2];
+		} __packed rlm;
+	} __packed rlm_req;
+	uint8_t phymode = 0, chan;
+	int rv;
+
+	if (IEEE80211_IS_CHAN_2GHZ(c)) {
+		phymode = (1 << 1) | (1 << 2);		/* B, G */
+		if (ieee80211_node_supports_ht(ni))
+			phymode |= 1 << 3;		/* GN */
+	} else {
+		phymode = 1 << 0;			/* A */
+		if (ieee80211_node_supports_ht(ni))
+			phymode |= 1 << 4;		/* AN */
+		if (ieee80211_node_supports_vht(ni))
+			phymode |= 1 << 5;		/* AC */
+	}
+
+	memset(&basic_req, 0, sizeof(basic_req));
+	basic_req.hdr.bss_idx = mvif->idx;
+	basic_req.basic.tag = htole16(UNI_BSS_INFO_BASIC);
+	basic_req.basic.len = htole16(sizeof(basic_req.basic));
+	basic_req.basic.active = 1;
+	basic_req.basic.omac_idx = mvif->omac_idx;
+	basic_req.basic.hw_bss_idx = mvif->omac_idx;
+	basic_req.basic.band_idx = mvif->band_idx;
+	basic_req.basic.wmm_idx = mvif->wmm_idx;
+	basic_req.basic.conn_type = htole32(STA_TYPE_STA | NETWORK_INFRA);
+	basic_req.basic.conn_state = !enable;
+	IEEE80211_ADDR_COPY(basic_req.basic.bssid, ni->ni_bssid);
+	basic_req.basic.bmc_tx_wlan_idx = htole16(mvif->vif_mn.wcid);
+	basic_req.basic.sta_idx = htole16(mvif->vif_mn.wcid);
+	basic_req.basic.bcn_interval = htole16(ni->ni_intval);
+	basic_req.basic.dtim_period = ni->ni_dtimperiod;
+	basic_req.basic.phymode = phymode;
+	basic_req.basic.nonht_basic_phy =
+	    htole16(mt7921_get_phy_mode_v2(sc, ni));
+	basic_req.qos.tag = htole16(UNI_BSS_INFO_QBSS);
+	basic_req.qos.len = htole16(sizeof(basic_req.qos));
+	basic_req.qos.qos = (ni->ni_flags & IEEE80211_NODE_QOS) ? 1 : 0;
+
+	MWX_DEV_LOG(sc, "bss info enable=%d bssid=%s bcn=%u dtim=%u "
+	    "phymode=0x%x wcid=%u\n", enable, ether_sprintf(ni->ni_bssid),
+	    ni->ni_intval, ni->ni_dtimperiod, phymode, mvif->vif_mn.wcid);
+
+	rv = mwx_mcu_send_wait(sc, MCU_UNI_CMD_BSS_INFO_UPDATE, &basic_req,
+	    sizeof(basic_req));
+	if (rv != 0)
+		return rv;
+
+	chan = ieee80211_mhz2ieee(c->ic_freq, c->ic_flags);
+	memset(&rlm_req, 0, sizeof(rlm_req));
+	rlm_req.hdr.bss_idx = mvif->idx;
+	rlm_req.rlm.tag = htole16(UNI_BSS_INFO_RLM);
+	rlm_req.rlm.len = htole16(sizeof(rlm_req.rlm));
+	rlm_req.rlm.control_channel = chan;
+	rlm_req.rlm.center_chan = chan;	/* matches mt7921_mcu_set_chan_info() */
+	rlm_req.rlm.bw = mt7921_mcu_chan_bw(c);
+	rlm_req.rlm.tx_streams = sc->sc_capa.num_streams;
+	rlm_req.rlm.rx_streams = sc->sc_capa.antenna_mask;
+	rlm_req.rlm.short_st = 1;
+	rlm_req.rlm.ht_op_info = rlm_req.rlm.bw == CMD_CBW_20MHZ ? 0 : 4;
+	rlm_req.rlm.band = IEEE80211_IS_CHAN_2GHZ(c) ? 0 : 1;
+
+	return mwx_mcu_send_wait(sc, MCU_UNI_CMD_BSS_INFO_UPDATE, &rlm_req,
+	    sizeof(rlm_req));
 }
 
 int
