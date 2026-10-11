@@ -217,6 +217,7 @@ int bus_dmamap_create(bus_dma_tag_t tag, bus_size_t size, int nsegments, bus_siz
 	*dmamp = new bus_dmamap;
 	memset(*dmamp, 0, sizeof(**dmamp));
 	(*dmamp)->dm_maxsize = size;
+	(*dmamp)->dm_maxsegs = nsegments < 23 ? nsegments : 23;
 	(*dmamp)->cursor = IOMbufNaturalMemoryCursor::withSpecification(maxsegsz, nsegments);
 	if ((*dmamp)->cursor == 0)
 		return 1;
@@ -385,19 +386,35 @@ int bus_dmamap_load(bus_dmamap_t map, mbuf_t mb) {
 	}
 	map->dm_mbuf = mb;
 	map->dm_bounce = false;
-	map->dm_nsegs = map->cursor->getPhysicalSegmentsWithCoalesce(mb, segs, 23);
-	if (map->dm_nsegs == 0)
-		return 1;
+	/* never more segments than the map was created for (the caller's limit) */
+	map->dm_nsegs = map->cursor->getPhysicalSegmentsWithCoalesce(mb, segs,
+	    map->dm_maxsegs);
 	size_t pktlen = mbuf_pkthdr_len(mb);
-	if (pktlen > UINT32_MAX)
+	if (pktlen == 0 || pktlen > UINT32_MAX)
 		return 1;
 	map->dm_mapsize = (bus_size_t)pktlen;
 	bool needs_bounce = false;
+	size_t mapped = 0;
 	for (int i = 0; i < map->dm_nsegs; i++) {
 		if (segs[i].location > UINT32_MAX || segs[i].length > UINT32_MAX) {
 			needs_bounce = true;
 			break;
 		}
+		mapped += segs[i].length;
+	}
+	/*
+	 * If the chain cannot be coalesced into dm_maxsegs segments the
+	 * cursor returns none (or segments that do not cover the packet).
+	 * Copy such a packet into the contiguous bounce buffer instead.
+	 */
+	if (!needs_bounce && mapped != pktlen) {
+		static uint32_t short_log_count;
+		if (short_log_count < 16) {
+			IOLog("SimpleMtkWlan-dma: mbuf chain mapped %zu of %zu bytes in %u segments, bouncing\n",
+			    mapped, pktlen, map->dm_nsegs);
+			short_log_count++;
+		}
+		needs_bounce = true;
 	}
 	if (needs_bounce) {
 		static uint32_t bounce_log_count;
