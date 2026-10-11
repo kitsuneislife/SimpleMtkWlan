@@ -5823,19 +5823,20 @@ mt7921_mac_write_txwi_80211(struct mwx_softc *sc, struct mbuf *m,
 	struct ieee80211com *ic = &sc->sc_ic;
 	struct ieee80211_frame *wh;
 	uint32_t val;
-	uint8_t type, subtype, tid = 0;
+	uint8_t fc_type, type, subtype, tid = 0;
 	u_int hdrlen;
 	int multicast;
 
 
 	wh = mtod(m, struct ieee80211_frame *);
-	type = wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
-	type >>= IEEE80211_FC0_TYPE_SHIFT;
+	/* fc_type is compared with IEEE80211_FC0_TYPE_*, type goes to the TXD */
+	fc_type = wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
+	type = fc_type >> IEEE80211_FC0_TYPE_SHIFT;
 	subtype = wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK;
 	subtype >>= IEEE80211_FC0_SUBTYPE_SHIFT;
 	multicast = IEEE80211_IS_MULTICAST(wh->i_addr1);
 
-	if (type == IEEE80211_FC0_TYPE_CTL)
+	if (fc_type == IEEE80211_FC0_TYPE_CTL)
 		hdrlen = sizeof(struct ieee80211_frame_min);
 	else
 		hdrlen = ieee80211_get_hdrlen(wh);
@@ -5879,7 +5880,7 @@ mt7921_mac_write_txwi_80211(struct mwx_softc *sc, struct mbuf *m,
 	}
 #endif
 
-	if (multicast || type != IEEE80211_FC0_TYPE_DATA) {
+	if (multicast || fc_type != IEEE80211_FC0_TYPE_DATA) {
 		/* Fixed rata is available just for 802.11 txd */
 		uint32_t rate, val6;
 
@@ -5942,7 +5943,7 @@ mt7921_mac_write_txwi_80211(struct mwx_softc *sc, struct mbuf *m,
 #ifdef NOTYET
 		if ((ni->ni_flags & IEEE80211_NODE_HT) &&
 		    !IEEE80211_IS_MULTICAST(wh->i_addr1) &&
-		    type == IEEE80211_FC0_TYPE_DATA &&
+		    fc_type == IEEE80211_FC0_TYPE_DATA &&
 		    rinfo->ht_plcp != MWX_RATE_HT_SISO_MCS_INV_PLCP) {
 			tap->wt_rate = (0x80 | rinfo->ht_plcp);
 		} else
