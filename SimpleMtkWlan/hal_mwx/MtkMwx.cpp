@@ -3671,10 +3671,31 @@ mwx_load_firmware(struct mwx_softc *sc)
 
 	MWX_DEV_LOG(sc, "firmware load start hwtype=%s\n",
 	    sc->sc_hwtype == MWX_HW_MT7922 ? "MT7922" : "MT7921");
+	/*
+	 * MT_TOP_MISC2_FW_N9_RDY is a two-bit field: 0x1 (FW_PWR_ON) means the
+	 * MCU sits in its ROM waiting for a download, only 0x3 means firmware
+	 * is running. Testing for any bit skipped the download on a card that
+	 * was waiting for it (seen after FLR in VM passthrough). Firmware left
+	 * running by another OS (warm reboot from Windows or Linux) answers on
+	 * rings that no longer exist, so restart the MCU into its ROM and
+	 * download again, as Linux mt792x_load_firmware() does.
+	 */
 	reg = mwx_read(sc, MT_CONN_ON_MISC) & MT_TOP_MISC2_FW_N9_RDY;
-	if (reg != 0) {
-		MWX_DEV_LOG(sc, "firmware already downloaded status=0x%08x\n", reg);
-		return 0;
+	MWX_DEV_LOG(sc, "firmware state before download=0x%x\n", reg);
+	if (reg == MT_TOP_MISC2_FW_N9_RDY) {
+		struct {
+			uint8_t power_mode;
+			uint8_t rsv[3];
+		} req;
+
+		memset(&req, 0, sizeof(req));
+		req.power_mode = 1;
+		MWX_DEV_LOG(sc, "firmware running, restarting MCU\n");
+		mwx_mcu_send_msg(sc, MCU_CMD_NIC_POWER_CTRL, &req, sizeof(req),
+		    NULL);
+		if (mwx_poll(sc, MT_CONN_ON_MISC, MT_TOP_MISC2_FW_PWR_ON,
+		    MT_TOP_MISC_FW_STATE, 1000) != 0)
+			MWX_DEV_LOG(sc, "MCU not ready for firmware download\n");
 	}
 
 	switch (sc->sc_hwtype) {
