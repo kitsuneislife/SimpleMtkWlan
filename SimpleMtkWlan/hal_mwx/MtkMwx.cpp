@@ -61,6 +61,7 @@ OSDefineMetaClassAndStructors(MtkMwx, MtkHalService)
 
 /* entries into mwx_intr(), reported when an MCU command times out */
 static volatile uint32_t mwx_intr_calls;
+static volatile uint32_t mwx_last_mcu_cmd;
 #define MWX_DEV_LOG(sc, fmt, args...) \
 	printf("SimpleMtkWlan-mwx: %s: " fmt, DEVNAME(sc), ##args)
 
@@ -1729,6 +1730,10 @@ mwx_intr(void *arg)
 
 	if (intr & MT_INT_MCU_CMD) {
 		intr_sw = mwx_read(sc, MT_MCU_CMD);
+		if (intr_sw != 0)
+			mwx_last_mcu_cmd = intr_sw;
+		if ((intr_sw & ~MT_MCU_CMD_WAKE_RX_PCIE) != 0)
+			MWX_DEV_LOG(sc, "mcu sw interrupt 0x%08x\n", intr_sw);
 		if (intr_log_count < 16)
 			MWX_DEV_LOG(sc, "mcu interrupt status=0x%08x\n", intr_sw);
 		/* ack MCU2HOST_SW_INT_STA */
@@ -3344,9 +3349,11 @@ mwx_dma_dump_state(struct mwx_softc *sc, const char *why)
 	    mwx_read(sc, MT_WFDMA0_HOST_INT_STA),
 	    mwx_read(sc, MT_WFDMA0_HOST_INT_ENA), sc->sc_intr_mask,
 	    mwx_read(sc, MT_WFDMA0_GLO_CFG));
-	MWX_DEV_LOG(sc, "%s: dummy_cr=0x%08x lpcr=0x%08x\n", why,
+	MWX_DEV_LOG(sc, "%s: dummy_cr=0x%08x lpcr=0x%08x mcu_cmd=0x%08x "
+	    "last_mcu_cmd=0x%08x\n", why,
 	    mwx_read(sc, MT_WFDMA_DUMMY_CR),
-	    mwx_read(sc, MT_TOP_LPCR_HOST_BAND0));
+	    mwx_read(sc, MT_TOP_LPCR_HOST_BAND0), mwx_read(sc, MT_MCU_CMD),
+	    mwx_last_mcu_cmd);
 	for (i = 0; i < nitems(q); i++)
 		MWX_DEV_LOG(sc, "%s: %s cpu=%u dma=%u prod=%u cons=%u\n", why,
 		    name[i], mwx_read(sc, q[i]->mq_regbase + MT_DMA_CPU_IDX),
