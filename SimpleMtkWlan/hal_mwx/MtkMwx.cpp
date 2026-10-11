@@ -3290,6 +3290,9 @@ mwx_dma_dump_state(struct mwx_softc *sc, const char *why)
 	    mwx_read(sc, MT_WFDMA0_HOST_INT_STA),
 	    mwx_read(sc, MT_WFDMA0_HOST_INT_ENA), sc->sc_intr_mask,
 	    mwx_read(sc, MT_WFDMA0_GLO_CFG));
+	MWX_DEV_LOG(sc, "%s: dummy_cr=0x%08x lpcr=0x%08x\n", why,
+	    mwx_read(sc, MT_WFDMA_DUMMY_CR),
+	    mwx_read(sc, MT_TOP_LPCR_HOST_BAND0));
 	for (i = 0; i < nitems(q); i++)
 		MWX_DEV_LOG(sc, "%s: %s cpu=%u dma=%u prod=%u cons=%u\n", why,
 		    name[i], mwx_read(sc, q[i]->mq_regbase + MT_DMA_CPU_IDX),
