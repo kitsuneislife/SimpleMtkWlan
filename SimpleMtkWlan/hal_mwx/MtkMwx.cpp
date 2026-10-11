@@ -1999,8 +1999,8 @@ mwx_attach(struct device *parent, struct device *self, void *aux)
 #endif
 	ic->ic_bgscan_start = mwx_bgscan;
 	ic->ic_bgscan_done = mwx_bgscan_done;
-	ic->ic_set_key = mwx_set_key;
-	ic->ic_delete_key = mwx_delete_key;
+	/* debug: software crypto */
+
 
 	/* Override 802.11 state transition machine. */
 	sc->sc_newstate = ic->ic_newstate;
