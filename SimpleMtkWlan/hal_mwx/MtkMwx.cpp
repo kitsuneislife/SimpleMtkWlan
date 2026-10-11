@@ -62,8 +62,17 @@ OSDefineMetaClassAndStructors(MtkMwx, MtkHalService)
 /* entries into mwx_intr(), reported when an MCU command times out */
 static volatile uint32_t mwx_intr_calls;
 static volatile uint32_t mwx_last_mcu_cmd;
+static inline uint32_t
+mwx_log_ms(void)
+{
+	uint64_t ns;
+
+	absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
+	return (uint32_t)(ns / 1000000);
+}
 #define MWX_DEV_LOG(sc, fmt, args...) \
-	printf("SimpleMtkWlan-mwx: %s: " fmt, DEVNAME(sc), ##args)
+	printf("SimpleMtkWlan-mwx: [%u] %s: " fmt, mwx_log_ms(), DEVNAME(sc), \
+	    ##args)
 
 #define ifnet _ifnet
 #define mbuf __mbuf
