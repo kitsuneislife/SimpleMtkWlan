@@ -2079,7 +2079,7 @@ mwx_attach(struct device *parent, struct device *self, void *aux)
 #ifndef IEEE80211_STA_ONLY
 	ic->ic_node_leave = mwx_node_leave;
 #endif
-	ic->ic_bgscan_start = mwx_bgscan;
+	ic->ic_bgscan_start = NULL;	/* debug experiment: no bgscan */
 	ic->ic_bgscan_done = mwx_bgscan_done;
 	ic->ic_set_key = mwx_set_key;
 	ic->ic_delete_key = mwx_delete_key;
