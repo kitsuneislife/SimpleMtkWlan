@@ -127,7 +127,23 @@ void interruptTrampoline(OSObject *ih, IOInterruptEventSource *, int count) {
 void* pci_intr_establish(pci_chipset_tag_t pc, pci_intr_handle_t ih, int level, int (*handler)(void *), void *arg) {
 	ih->arg = arg;
 	ih->func = handler;
-	ih->intr = IOInterruptEventSource::interruptEventSource(ih, &interruptTrampoline, ih->dev);
+	/*
+	 * Interrupt index 0 of an IOPCIDevice is the legacy INTx line; MSI
+	 * vectors come after it. Register the first MSI index so IOPCIFamily
+	 * programs the MSI address and data itself, and fall back to INTx.
+	 */
+	int index = 0;
+	for (int i = 0; ; i++) {
+		int type = 0;
+		if (ih->dev->getInterruptType(i, &type) != kIOReturnSuccess)
+			break;
+		if (type & kIOInterruptTypePCIMessaged) {
+			index = i;
+			break;
+		}
+	}
+	IOLog("SimpleMtkWlan: interrupt index %d (%s)\n", index, index ? "msi" : "intx");
+	ih->intr = IOInterruptEventSource::interruptEventSource(ih, &interruptTrampoline, ih->dev, index);
 	
 	if (ih->intr == 0)
 		return 0;
