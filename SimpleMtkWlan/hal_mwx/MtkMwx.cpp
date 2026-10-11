@@ -1879,10 +1879,22 @@ mwx_attach(struct device *parent, struct device *self, void *aux)
 	MWX_DEV_LOG(sc, "attach interrupt mapped source=%s\n",
 	    pci_intr_string(pa->pa_pc, ih));
 
-	if (mwx_mcu_fw_pmctrl(sc) != 0 ||
-	    mwx_mcu_drv_pmctrl(sc) != 0) {
+	if (mwx_mcu_fw_pmctrl(sc) != 0) {
 		MWX_DEV_LOG(sc, "attach MCU power control failed\n");
 		goto fail;
+	}
+	if (mwx_mcu_drv_pmctrl(sc) != 0) {
+		/*
+		 * A chip left running by an earlier driver can refuse driver
+		 * ownership until it is power cycled.  A WFSYS reset does not
+		 * need ownership and brings it back.
+		 */
+		printf("%s: resetting WFSYS to recover driver own\n",
+		    DEVNAME(sc));
+		if (mwx_wfsys_reset(sc) != 0 || mwx_mcu_drv_pmctrl(sc) != 0) {
+			MWX_DEV_LOG(sc, "attach MCU power control failed\n");
+			goto fail;
+		}
 	}
 	MWX_DEV_LOG(sc, "attach MCU power control ok\n");
 
