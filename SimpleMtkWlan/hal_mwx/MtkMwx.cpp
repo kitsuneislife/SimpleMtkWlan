@@ -3107,8 +3107,10 @@ mwx_mcu_send_msg(struct mwx_softc *sc, uint32_t cmd, void *data, size_t len,
 	struct mbuf *m;
 
 	m = mwx_mcu_alloc_msg(len);
-	if (m == NULL)
+	if (m == NULL) {
+		MWX_DEV_LOG(sc, "mcu msg alloc failed cmd=0x%x len=%zu\n", cmd, len);
 		return ENOMEM;
+	}
 
 	if (len != 0)
 		memcpy(mtod(m, caddr_t), data, len);
@@ -4079,6 +4081,16 @@ mwx_mcu_send_firmware(struct mwx_softc *sc, int cmd, u_char *data,
 {
 	size_t cur_len;
 	int rv;
+
+	/*
+	 * Each chunk goes out as one mbuf with the MCU TXD in front of it.
+	 * On macOS a single buffer larger than a 4 KB cluster needs a jumbo
+	 * cluster, which M_DONTWAIT allocations do not get, so 4096 data
+	 * bytes plus the TXD failed with ENOMEM. FW_SCATTER is a byte stream,
+	 * so smaller chunks are fine.
+	 */
+	if (max_len > MBIGCLBYTES - sizeof(struct mwx_mcu_txd))
+		max_len = MBIGCLBYTES - sizeof(struct mwx_mcu_txd);
 
 	while (len > 0) {
 		cur_len = len;
