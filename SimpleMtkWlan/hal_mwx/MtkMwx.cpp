@@ -578,6 +578,7 @@ void	mwx_radiotap_attach(struct mwx_softc *);
 int	mwx_newstate(struct ieee80211com *, enum ieee80211_state, int);
 void	mwx_newstate_task(void *);
 int	mwx_scan(struct mwx_softc *);
+static void	mwx_dma_dump_state(struct mwx_softc *, const char *);
 int	mwx_bgscan(struct ieee80211com *);
 void	mwx_bgscan_done(struct ieee80211com *,
 	    struct ieee80211_node_switch_bss_arg *, size_t);
@@ -991,6 +992,20 @@ mwx_stop(struct ifnet *ifp)
 void
 mwx_watchdog(struct ifnet *ifp)
 {
+	struct mwx_softc *sc = (struct mwx_softc *)ifp->if_softc;
+	static uint32_t last_intr_calls, stall_logs;
+
+	/*
+	 * Debug aid: frames are queued for TX but no interrupt arrived since
+	 * the last tick (the watchdog runs once a second).
+	 */
+	if (sc->sc_txq.mq_prod != sc->sc_txq.mq_cons &&
+	    mwx_intr_calls == last_intr_calls && stall_logs < 8) {
+		mwx_dma_dump_state(sc, "tx stall");
+		stall_logs++;
+	}
+	last_intr_calls = mwx_intr_calls;
+
 	ifp->if_timer = 0;
 	ieee80211_watchdog(ifp);
 }
@@ -3312,29 +3327,29 @@ mwx_mcu_rx_event(struct mwx_softc *sc, struct mbuf *m)
 }
 
 /*
- * Called when an MCU command times out: shows whether the device fetched
- * the command (TX MCU ring DMA index), answered it (RX MCU ring DMA index)
- * and raised an interrupt, so a dead interrupt path can be told apart from
- * a firmware that does not answer.
+ * Dump the DMA and interrupt state: whether the device fetched what we
+ * queued (TX ring DMA index), delivered anything (RX ring DMA index) and
+ * raised an interrupt, so a dead interrupt path can be told apart from a
+ * firmware that does not answer. Used on MCU timeouts and TX stalls.
  */
 static void
-mwx_mcu_dump_state(struct mwx_softc *sc, uint32_t cmd)
+mwx_dma_dump_state(struct mwx_softc *sc, const char *why)
 {
-	struct mwx_queue *tq = &sc->sc_txmcuq, *rq = &sc->sc_rxmcuq;
+	struct mwx_queue *q[] = { &sc->sc_txq, &sc->sc_txmcuq, &sc->sc_rxq,
+	    &sc->sc_rxmcuq };
+	static const char *name[] = { "tx", "txmcu", "rx", "rxmcu" };
+	u_int i;
 
-	MWX_DEV_LOG(sc, "mcu timeout cmd=0x%x intr_calls=%u int_sta=0x%08x "
-	    "int_ena=0x%08x mask=0x%08x glo_cfg=0x%08x\n", cmd, mwx_intr_calls,
+	MWX_DEV_LOG(sc, "%s: intr_calls=%u int_sta=0x%08x int_ena=0x%08x "
+	    "mask=0x%08x glo_cfg=0x%08x\n", why, mwx_intr_calls,
 	    mwx_read(sc, MT_WFDMA0_HOST_INT_STA),
 	    mwx_read(sc, MT_WFDMA0_HOST_INT_ENA), sc->sc_intr_mask,
 	    mwx_read(sc, MT_WFDMA0_GLO_CFG));
-	MWX_DEV_LOG(sc, "mcu timeout txmcu cpu=%u dma=%u prod=%u cons=%u "
-	    "rxmcu cpu=%u dma=%u prod=%u cons=%u\n",
-	    mwx_read(sc, tq->mq_regbase + MT_DMA_CPU_IDX),
-	    mwx_read(sc, tq->mq_regbase + MT_DMA_DMA_IDX), tq->mq_prod,
-	    tq->mq_cons,
-	    mwx_read(sc, rq->mq_regbase + MT_DMA_CPU_IDX),
-	    mwx_read(sc, rq->mq_regbase + MT_DMA_DMA_IDX), rq->mq_prod,
-	    rq->mq_cons);
+	for (i = 0; i < nitems(q); i++)
+		MWX_DEV_LOG(sc, "%s: %s cpu=%u dma=%u prod=%u cons=%u\n", why,
+		    name[i], mwx_read(sc, q[i]->mq_regbase + MT_DMA_CPU_IDX),
+		    mwx_read(sc, q[i]->mq_regbase + MT_DMA_DMA_IDX),
+		    q[i]->mq_prod, q[i]->mq_cons);
 }
 
 int
@@ -3348,7 +3363,7 @@ mwx_mcu_wait_resp_int(struct mwx_softc *sc, uint32_t cmd, int seq,
 	rv = tsleep_nsec(&sc->sc_mcu_wait[seq], 0, "mwxwait", SEC_TO_NSEC(3));
 	if (rv != 0) {
 		printf("%s: command %x timeout\n", DEVNAME(sc), cmd);
-		mwx_mcu_dump_state(sc, cmd);
+		mwx_dma_dump_state(sc, "mcu timeout");
 		mwx_reset(sc);
 		return rv;
 	}
@@ -3373,7 +3388,7 @@ mwx_mcu_wait_resp_msg(struct mwx_softc *sc, uint32_t cmd, int seq,
 	rv = tsleep_nsec(&sc->sc_mcu_wait[seq], 0, "mwxwait", SEC_TO_NSEC(3));
 	if (rv != 0) {
 		printf("%s: command %x timeout\n", DEVNAME(sc), cmd);
-		mwx_mcu_dump_state(sc, cmd);
+		mwx_dma_dump_state(sc, "mcu timeout");
 		mwx_reset(sc);
 		return rv;
 	}
