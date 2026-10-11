@@ -2971,6 +2971,24 @@ mwx_dma_rx_process(struct mwx_softc *sc, struct mbuf_list *ml)
 		sc->sc_rx_process_events++;
 	}
 
+	/* debug: RX counters, at most every 2 s while frames arrive */
+	static uint32_t rxstat_last_ms, rxstat_ifinput;
+	rxstat_ifinput += ml_len(&mlout);
+	if (normal_count != 0 && mwx_log_ms() - rxstat_last_ms >= 2000) {
+		struct ieee80211_stats *st = &sc->sc_ic.ic_stats;
+
+		rxstat_last_ms = mwx_log_ms();
+		MWX_DEV_LOG(sc, "rxstat norm=%u nmcu=%u fill_fail=%u "
+		    "if_input=%u intr=%u dup=%u wrongbss=%u notassoc=%u "
+		    "unenc=%u decap=%u ccmp_replay=%u ccmp_err=%u nombuf=%u\n",
+		    sc->sc_rx_pkt_normal, sc->sc_rx_pkt_normal_mcu,
+		    sc->sc_rx_fill_fail, rxstat_ifinput, mwx_intr_calls,
+		    st->is_rx_dup, st->is_rx_wrongbss, st->is_rx_notassoc,
+		    st->is_rx_unencrypted, st->is_rx_decap,
+		    st->is_ccmp_replays, st->is_ccmp_dec_errs,
+		    st->is_rx_nombuf);
+	}
+
 	if_input(&sc->sc_ic.ic_if, &mlout);
 }
 
