@@ -5542,6 +5542,18 @@ mt7921_mac_fill_rx(struct mwx_softc *sc, struct mbuf *m,
 	    !(rxd1 & (MT_RXD1_NORMAL_CLM | MT_RXD1_NORMAL_CM))) {
 		rxi->rxi_flags |= IEEE80211_RXI_HWDEC;
 	}
+	{
+		/* debug: crypto status of frames once the port is open */
+		static uint32_t sec_log_count;
+		struct ieee80211_node *bss = sc->sc_ic.ic_bss;
+
+		if (bss != NULL && bss->ni_port_valid && sec_log_count < 24) {
+			MWX_DEV_LOG(sc, "rx sec rxd1=0x%08x rxd2=0x%08x "
+			    "wlan_idx=%u\n", rxd1, rxd2,
+			    (unsigned)(rxd1 & 0x3ff));
+			sec_log_count++;
+		}
+	}
 
 	remove_pad = (rxd2 & MT_RXD2_NORMAL_HDR_OFFSET_MASK) >>
 	    MT_RXD2_NORMAL_HDR_OFFSET_SHIFT;
