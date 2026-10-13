@@ -61,6 +61,9 @@ OSDefineMetaClassAndStructors(MtkMwx, MtkHalService)
 
 /* entries into mwx_intr(), reported when an MCU command times out */
 static volatile uint32_t mwx_intr_calls;
+#define MWX_TXLOCK(sc)	IORecursiveLockLock((sc)->sc_txlock)
+#define MWX_TXUNLOCK(sc)	IORecursiveLockUnlock((sc)->sc_txlock)
+
 #define MWX_DEV_LOG(sc, fmt, args...) \
 	printf("SimpleMtkWlan-mwx: %s: " fmt, DEVNAME(sc), ##args)
 
@@ -380,6 +383,13 @@ struct mwx_softc {
 	struct mwx_queue	sc_rxfwdlq;
 
 	struct mwx_txwi_desc	sc_txwi;
+	/*
+	 * Serialises the data TX path: the txwi free list and the data TX
+	 * ring. mwx_start() runs on the network output thread and on net80211
+	 * task threads, TX done and TX free events on the interrupt work loop.
+	 * OpenBSD covers this with splnet(), which does nothing here.
+	 */
+	IORecursiveLock		*sc_txlock;
 
 	bus_space_tag_t		sc_st;
 	bus_space_handle_t	sc_memh;
@@ -567,6 +577,7 @@ int	mwx_init(struct ifnet *);
 void	mwx_stop(struct ifnet *);
 void	mwx_watchdog(struct ifnet *);
 void	mwx_start(struct ifnet *);
+void	mwx_start_locked(struct ifnet *);
 int	mwx_ioctl(struct ifnet *, u_long, caddr_t);
 
 struct ieee80211_node *mwx_node_alloc(struct ieee80211com *);
@@ -620,6 +631,7 @@ int	mwx_dma_tx_enqueue(struct mwx_softc *, struct mwx_queue *,
 void	mwx_dma_txwi_enqueue(struct mwx_softc *, struct mwx_queue *,
 	    struct mwx_txwi *);
 void	mwx_dma_tx_cleanup(struct mwx_softc *, struct mwx_queue *);
+void	mwx_dma_tx_cleanup_locked(struct mwx_softc *, struct mwx_queue *);
 void	mwx_dma_tx_done(struct mwx_softc *);
 void	mwx_dma_rx_process(struct mwx_softc *, struct mbuf_list *);
 void	mwx_dma_rx_dequeue(struct mwx_softc *, struct mwx_queue *,
@@ -696,6 +708,7 @@ void		mt7921_mac_write_txwi_80211(struct mwx_softc *, struct mbuf *,
 void		mt7921_mac_write_txwi(struct mwx_softc *, struct mbuf *,
 		    struct ieee80211_node *, struct mt76_txwi *);
 void		mwx_mac_tx_free(struct mwx_softc *, struct mbuf *);
+void		mwx_mac_tx_free_locked(struct mwx_softc *, struct mbuf *);
 int		mt7921_set_channel(struct mwx_softc *);
 
 uint8_t		 mt7921_get_phy_mode_v2(struct mwx_softc *,
@@ -997,6 +1010,16 @@ mwx_watchdog(struct ifnet *ifp)
 
 void
 mwx_start(struct ifnet *ifp)
+{
+	struct mwx_softc *sc = (struct mwx_softc *)ifp->if_softc;
+
+	MWX_TXLOCK(sc);
+	mwx_start_locked(ifp);
+	MWX_TXUNLOCK(sc);
+}
+
+void
+mwx_start_locked(struct ifnet *ifp)
 {
 	struct mwx_softc *sc = (struct mwx_softc *)ifp->if_softc;
 	struct ieee80211com *ic = &sc->sc_ic;
@@ -1852,6 +1875,9 @@ mwx_attach(struct device *parent, struct device *self, void *aux)
 	sc->sc_pc = pa->pa_pc;
 	sc->sc_tag = pa->pa_tag;
 	sc->sc_dmat = pa->pa_dmat;
+	if (sc->sc_txlock == NULL &&
+	    (sc->sc_txlock = IORecursiveLockAlloc()) == NULL)
+		return false;
 	sc->sc_intr_mask = MT_INT_RX_DONE_ALL | MT_INT_TX_DONE_ALL |
 	    MT_INT_MCU_CMD;
 	if (PCI_PRODUCT(pa->pa_id) == PCI_PRODUCT_MEDIATEK_MT7922)
@@ -2750,6 +2776,14 @@ mwx_dma_txwi_enqueue(struct mwx_softc *sc, struct mwx_queue *q,
 
 void
 mwx_dma_tx_cleanup(struct mwx_softc *sc, struct mwx_queue *q)
+{
+	MWX_TXLOCK(sc);
+	mwx_dma_tx_cleanup_locked(sc, q);
+	MWX_TXUNLOCK(sc);
+}
+
+void
+mwx_dma_tx_cleanup_locked(struct mwx_softc *sc, struct mwx_queue *q)
 {
 	struct mwx_queue_data *md;
 	struct mwx_desc *desc;
@@ -6075,6 +6109,14 @@ mt7921_mac_write_txwi(struct mwx_softc *sc, struct mbuf *m,
 void
 mwx_mac_tx_free(struct mwx_softc *sc, struct mbuf *m)
 {
+	MWX_TXLOCK(sc);
+	mwx_mac_tx_free_locked(sc, m);
+	MWX_TXUNLOCK(sc);
+}
+
+void
+mwx_mac_tx_free_locked(struct mwx_softc *sc, struct mbuf *m)
+{
 	struct mwx_txwi *mt;
 	uint32_t *txfree;
 	uint32_t txval;
@@ -6948,6 +6990,8 @@ MtkMwx::releaseAll()
 {
 	MWX_LOG("HAL releaseAll com=%p pci=%p\n", (void *)com, (void *)pci);
 	if (com) {
+		if (com->sc_txlock != NULL)
+			IORecursiveLockFree(com->sc_txlock);
 		mwx_free_mem(com);
 		com = NULL;
 	}
