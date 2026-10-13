@@ -690,6 +690,7 @@ int		mt7921_mcu_set_tx(struct mwx_softc *, struct mwx_vif *);
 int		mt7921_mac_fill_rx(struct mwx_softc *, struct mbuf *,
 		    struct ieee80211_rxinfo *);
 uint32_t	mt7921_mac_tx_rate_val(struct mwx_softc *);
+int		mwx_frame_is_eapol(struct mbuf *, struct ieee80211_frame *);
 void		mt7921_mac_write_txwi_80211(struct mwx_softc *, struct mbuf *,
 		    struct ieee80211_node *, struct mt76_txwi *);
 void		mt7921_mac_write_txwi(struct mwx_softc *, struct mbuf *,
@@ -5880,7 +5881,8 @@ mt7921_mac_write_txwi_80211(struct mwx_softc *sc, struct mbuf *m,
 	}
 #endif
 
-	if (multicast || fc_type != IEEE80211_FC0_TYPE_DATA) {
+	if (multicast || fc_type != IEEE80211_FC0_TYPE_DATA ||
+	    mwx_frame_is_eapol(m, wh)) {
 		/* Fixed rata is available just for 802.11 txd */
 		uint32_t rate, val6;
 
@@ -5968,6 +5970,27 @@ mt7921_lmac_mapping(uint8_t ac)
 	return 3 - ac;
 }
 
+/*
+ * EAPOL frames (LLC/SNAP with ethertype 0x888e right after the 802.11 header).
+ * Like mac80211's control port frames they go out at the lowest basic rate
+ * and with a TX status, as in Linux's IEEE80211_TX_CTL_USE_MINRATE path.
+ */
+int
+mwx_frame_is_eapol(struct mbuf *m, struct ieee80211_frame *wh)
+{
+	const uint8_t *llc;
+	u_int hdrlen;
+
+	if ((wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) != IEEE80211_FC0_TYPE_DATA)
+		return 0;
+	hdrlen = ieee80211_get_hdrlen(wh);
+	if (mbuf_len(m) < hdrlen + 8)
+		return 0;
+	llc = (const uint8_t *)wh + hdrlen;
+	return llc[0] == 0xaa && llc[1] == 0xaa && llc[2] == 0x03 &&
+	    llc[6] == 0x88 && llc[7] == 0x8e;
+}
+
 void
 mt7921_mac_write_txwi(struct mwx_softc *sc, struct mbuf *m,
     struct ieee80211_node *ni, struct mt76_txwi *txp)
@@ -5977,11 +6000,23 @@ mt7921_mac_write_txwi(struct mwx_softc *sc, struct mbuf *m,
 	uint32_t val, p_fmt, omac_idx;
 	uint8_t q_idx, wmm_idx, band_idx;
 	uint8_t phy_idx = 0;
-	/* XXX hardcoded and wrong */
 	int pid = MT_PACKET_ID_FIRST;
 	enum mt76_txq_id qid = MT_TXQ_BE;
 
 	wh = mtod(m, struct ieee80211_frame *);
+
+	/*
+	 * A packet id of MT_PACKET_ID_FIRST or above asks the firmware to send
+	 * the TX status to the host (MT_TXD5_TX_STATUS_HOST). Linux does that
+	 * only for frames whose status mac80211 wants; for the rest the pid is
+	 * MT_PACKET_ID_NO_SKB and the firmware keeps the status for its own rate
+	 * adaptation. Asking for it on every unicast data frame kept the rate
+	 * at the lowest one. Management, group addressed and EAPOL frames still
+	 * report their status.
+	 */
+	if ((wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) == IEEE80211_FC0_TYPE_DATA &&
+	    !IEEE80211_IS_MULTICAST(wh->i_addr1) && !mwx_frame_is_eapol(m, wh))
+		pid = MT_PACKET_ID_NO_SKB;
 	omac_idx = sc->sc_vif.omac_idx << MT_TXD1_OWN_MAC_SHIFT;
 	wmm_idx = sc->sc_vif.wmm_idx;
 	band_idx = sc->sc_vif.band_idx;
